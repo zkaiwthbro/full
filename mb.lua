@@ -1,5 +1,5 @@
 -- ============================================================
--- Bee Suite: Unified GUI (rebindable keys + configs)
+-- Bee Suite: Unified GUI (rebindable keys + named walker configs)
 -- ============================================================
 
 local Players = game:GetService("Players")
@@ -23,6 +23,7 @@ task.wait(1)
 -- CONFIGS (with save/load)
 -- ============================================================
 local CONFIG_FILE = "beesuite_cfg_" .. game.PlaceId .. ".json"
+local WALKER_CONFIGS_FILE = "beesuite_walkercfgs_" .. game.PlaceId .. ".json"
 
 local WalkerCfg = {
     SmoothFactor = 0.25,
@@ -41,11 +42,8 @@ local WalkerCfg = {
     RouteBreakMax = 5,
 }
 
-local UtilsCfg = {
-    ResetInterval = 90, -- seconds
-}
+local UtilsCfg = { ResetInterval = 90 }
 
--- Default keybinds (as strings for saving)
 local Keybinds = {
     SetPoint = "K",
     ToggleWalk = "Q",
@@ -71,6 +69,25 @@ local function loadConfigs()
     end
 end
 loadConfigs()
+
+-- ============================================================
+-- WALKER CONFIGS (named routes)
+-- ============================================================
+-- Structure: { ["Config Name"] = {points = {{x,y,z}, ...}, walker = {...settings...}}, ...}
+local WalkerConfigs = {}
+local currentConfigName = nil -- currently loaded config
+
+local function saveWalkerConfigs()
+    pcall(function() writefile(WALKER_CONFIGS_FILE, HttpService:JSONEncode(WalkerConfigs)) end)
+end
+
+local function loadWalkerConfigs()
+    if isfile and isfile(WALKER_CONFIGS_FILE) then
+        local ok, data = pcall(function() return HttpService:JSONDecode(readfile(WALKER_CONFIGS_FILE)) end)
+        if ok and data then WalkerConfigs = data end
+    end
+end
+loadWalkerConfigs()
 
 -- ============================================================
 -- SHARED: ControlModule hook
@@ -103,7 +120,7 @@ local function getRoot()
 end
 
 -- ============================================================
--- UNIFIED GUI
+-- GUI
 -- ============================================================
 local gui = Instance.new("ScreenGui")
 gui.Name = "BeeSuite"
@@ -115,7 +132,7 @@ local FULL_HEIGHT = 500
 local MIN_HEIGHT = 32
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 300, 0, FULL_HEIGHT)
+frame.Size = UDim2.new(0, 320, 0, FULL_HEIGHT)
 frame.Position = UDim2.new(0.02, 0, 0.12, 0)
 frame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
 frame.BorderSizePixel = 0
@@ -155,7 +172,7 @@ minBtn.Parent = titleBar
 local minimized = false
 minBtn.MouseButton1Click:Connect(function()
     minimized = not minimized
-    frame.Size = UDim2.new(0, 300, 0, minimized and MIN_HEIGHT or FULL_HEIGHT)
+    frame.Size = UDim2.new(0, 320, 0, minimized and MIN_HEIGHT or FULL_HEIGHT)
     minBtn.Text = minimized and "+" or "—"
 end)
 
@@ -201,13 +218,13 @@ end
 
 local function createTab(name, width)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0, width or 70, 1, 0)
+    btn.Size = UDim2.new(0, width or 65, 1, 0)
     btn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
     btn.BorderSizePixel = 0
     btn.Text = name
     btn.TextColor3 = Color3.fromRGB(255, 255, 255)
     btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 12
+    btn.TextSize = 11
     btn.Parent = tabBar
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
 
@@ -320,9 +337,9 @@ local function makeConfigField(parent, labelText, cfgTable, cfgKey)
             box.Text = tostring(cfgTable[cfgKey])
         end
     end)
+    return box
 end
 
--- Keybind row (label + button that captures next key press)
 local waitingForKey = nil
 local function makeKeybindRow(parent, labelText, keyName)
     local container = Instance.new("Frame")
@@ -357,11 +374,9 @@ local function makeKeybindRow(parent, labelText, keyName)
         btn.Text = "[ Press key... ]"
         btn.BackgroundColor3 = Color3.fromRGB(200, 140, 40)
     end)
-
     return btn
 end
 
--- Listen for keys during rebind
 UIS.InputBegan:Connect(function(input, gp)
     if waitingForKey and input.UserInputType == Enum.UserInputType.Keyboard then
         local keyStr = input.KeyCode.Name
@@ -380,47 +395,89 @@ end)
 -- ============================================================
 local walkerTab = createTab("Walker")
 
-local SAVE_FILE = "waypoints_" .. game.PlaceId .. ".json"
 local points = {}
 local walking = false
 
-local function savePoints()
-    local data = {}
-    for _, v in ipairs(points) do table.insert(data, {v.X, v.Y, v.Z}) end
-    writefile(SAVE_FILE, HttpService:JSONEncode(data))
-end
-
-local function loadPoints()
-    if isfile and isfile(SAVE_FILE) then
-        local ok, data = pcall(function() return HttpService:JSONDecode(readfile(SAVE_FILE)) end)
-        if ok and data then
-            for _, v in ipairs(data) do table.insert(points, Vector3.new(v[1], v[2], v[3])) end
-        end
-    end
-end
-loadPoints()
-
 local walkerStatus = makeLabel(walkerTab, "")
+local currentCfgLabel = makeLabel(walkerTab, "Loaded config: <none>", Color3.fromRGB(180, 200, 255))
+
 local setBtn = makeButton(walkerTab, "Set Point", Color3.fromRGB(60, 120, 200))
 local walkBtn = makeButton(walkerTab, "Start Walking", Color3.fromRGB(60, 160, 80))
 local delBtn = makeButton(walkerTab, "Delete All Points", Color3.fromRGB(190, 60, 60))
 
-makeSectionHeader(walkerTab, "⚙ Movement Config")
-makeConfigField(walkerTab, "Smooth Factor", WalkerCfg, "SmoothFactor")
-makeConfigField(walkerTab, "Lookahead Dist", WalkerCfg, "LookaheadDist")
-makeConfigField(walkerTab, "Arrive Dist", WalkerCfg, "ArriveDist")
-makeConfigField(walkerTab, "Waypoint Timeout", WalkerCfg, "WaypointTimeout")
-makeConfigField(walkerTab, "Dest Jitter (studs)", WalkerCfg, "DestJitter")
-makeConfigField(walkerTab, "Micro Jitter", WalkerCfg, "MicroJitter")
-makeConfigField(walkerTab, "Tick Min (s)", WalkerCfg, "TickMin")
-makeConfigField(walkerTab, "Tick Max (s)", WalkerCfg, "TickMax")
-makeConfigField(walkerTab, "Pause Min (s)", WalkerCfg, "PauseBetweenMin")
-makeConfigField(walkerTab, "Pause Max (s)", WalkerCfg, "PauseBetweenMax")
-makeConfigField(walkerTab, "Short Pause %", WalkerCfg, "ShortPauseChance")
-makeConfigField(walkerTab, "Long Idle %", WalkerCfg, "LongIdleChance")
-makeConfigField(walkerTab, "Route Break Min", WalkerCfg, "RouteBreakMin")
-makeConfigField(walkerTab, "Route Break Max", WalkerCfg, "RouteBreakMax")
+-- ==== NAMED CONFIGS SECTION ====
+makeSectionHeader(walkerTab, "💾 Route Configs")
 
+-- Input for new config name
+local nameInputContainer = Instance.new("Frame")
+nameInputContainer.Size = UDim2.new(1, 0, 0, 28)
+nameInputContainer.BackgroundTransparency = 1
+nameInputContainer.Parent = walkerTab
+
+local nameInput = Instance.new("TextBox")
+nameInput.Size = UDim2.new(0.65, -4, 1, 0)
+nameInput.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+nameInput.BorderSizePixel = 0
+nameInput.PlaceholderText = "Config name..."
+nameInput.Text = ""
+nameInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+nameInput.PlaceholderColor3 = Color3.fromRGB(120, 120, 130)
+nameInput.Font = Enum.Font.Gotham
+nameInput.TextSize = 12
+nameInput.ClearTextOnFocus = false
+nameInput.Parent = nameInputContainer
+Instance.new("UICorner", nameInput).CornerRadius = UDim.new(0, 4)
+
+local saveNewBtn = Instance.new("TextButton")
+saveNewBtn.Size = UDim2.new(0.35, 0, 1, 0)
+saveNewBtn.Position = UDim2.new(0.65, 4, 0, 0)
+saveNewBtn.BackgroundColor3 = Color3.fromRGB(60, 160, 80)
+saveNewBtn.BorderSizePixel = 0
+saveNewBtn.Text = "Save New"
+saveNewBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+saveNewBtn.Font = Enum.Font.GothamBold
+saveNewBtn.TextSize = 11
+saveNewBtn.Parent = nameInputContainer
+Instance.new("UICorner", saveNewBtn).CornerRadius = UDim.new(0, 4)
+
+-- Update current button (saves to current config name)
+local updateBtn = makeButton(walkerTab, "Update Current Config", Color3.fromRGB(100, 140, 200), nil, 26)
+
+-- Container for config list
+local cfgListContainer = Instance.new("Frame")
+cfgListContainer.Size = UDim2.new(1, 0, 0, 0)
+cfgListContainer.AutomaticSize = Enum.AutomaticSize.Y
+cfgListContainer.BackgroundTransparency = 1
+cfgListContainer.Parent = walkerTab
+local cfgListLayout = Instance.new("UIListLayout")
+cfgListLayout.Padding = UDim.new(0, 3)
+cfgListLayout.Parent = cfgListContainer
+
+-- ==== MOVEMENT CONFIG ====
+makeSectionHeader(walkerTab, "⚙ Movement Settings")
+local cfgFields = {}
+cfgFields.SmoothFactor = makeConfigField(walkerTab, "Smooth Factor", WalkerCfg, "SmoothFactor")
+cfgFields.LookaheadDist = makeConfigField(walkerTab, "Lookahead Dist", WalkerCfg, "LookaheadDist")
+cfgFields.ArriveDist = makeConfigField(walkerTab, "Arrive Dist", WalkerCfg, "ArriveDist")
+cfgFields.WaypointTimeout = makeConfigField(walkerTab, "Waypoint Timeout", WalkerCfg, "WaypointTimeout")
+cfgFields.DestJitter = makeConfigField(walkerTab, "Dest Jitter (studs)", WalkerCfg, "DestJitter")
+cfgFields.MicroJitter = makeConfigField(walkerTab, "Micro Jitter", WalkerCfg, "MicroJitter")
+cfgFields.TickMin = makeConfigField(walkerTab, "Tick Min (s)", WalkerCfg, "TickMin")
+cfgFields.TickMax = makeConfigField(walkerTab, "Tick Max (s)", WalkerCfg, "TickMax")
+cfgFields.PauseBetweenMin = makeConfigField(walkerTab, "Pause Min (s)", WalkerCfg, "PauseBetweenMin")
+cfgFields.PauseBetweenMax = makeConfigField(walkerTab, "Pause Max (s)", WalkerCfg, "PauseBetweenMax")
+cfgFields.ShortPauseChance = makeConfigField(walkerTab, "Short Pause %", WalkerCfg, "ShortPauseChance")
+cfgFields.LongIdleChance = makeConfigField(walkerTab, "Long Idle %", WalkerCfg, "LongIdleChance")
+cfgFields.RouteBreakMin = makeConfigField(walkerTab, "Route Break Min", WalkerCfg, "RouteBreakMin")
+cfgFields.RouteBreakMax = makeConfigField(walkerTab, "Route Break Max", WalkerCfg, "RouteBreakMax")
+
+local function refreshCfgFields()
+    for k, box in pairs(cfgFields) do
+        box.Text = tostring(WalkerCfg[k])
+    end
+end
+
+-- ==== POINT LIST ====
 makeSectionHeader(walkerTab, "📍 Saved Points")
 local listContainer = Instance.new("Frame")
 listContainer.Size = UDim2.new(1, 0, 0, 0)
@@ -431,16 +488,19 @@ local listLayout = Instance.new("UIListLayout")
 listLayout.Padding = UDim.new(0, 3)
 listLayout.Parent = listContainer
 
+-- ==== FUNCTIONS ====
 local function updateWalkerStatus()
     walkerStatus.Text = "Points: " .. #points .. "  |  Walking: " .. (walking and "ON" or "OFF")
     walkerStatus.TextColor3 = walking and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(180, 180, 180)
 end
 
+local function updateCurrentCfgLabel()
+    currentCfgLabel.Text = "Loaded config: " .. (currentConfigName or "<none>")
+end
+
 local refreshList
 local function deletePoint(index)
     table.remove(points, index)
-    if #points > 0 then savePoints()
-    elseif isfile and isfile(SAVE_FILE) then delfile(SAVE_FILE) end
     refreshList()
     updateWalkerStatus()
 end
@@ -483,6 +543,182 @@ refreshList = function()
     end
 end
 
+-- ==== CONFIG MANAGEMENT ====
+local refreshCfgList
+
+local function saveConfigAs(name)
+    if not name or name == "" then return end
+    -- Snapshot points + walker settings
+    local pointsData = {}
+    for _, p in ipairs(points) do table.insert(pointsData, {p.X, p.Y, p.Z}) end
+    local walkerSnap = {}
+    for k, v in pairs(WalkerCfg) do walkerSnap[k] = v end
+
+    WalkerConfigs[name] = { points = pointsData, walker = walkerSnap }
+    currentConfigName = name
+    saveWalkerConfigs()
+    refreshCfgList()
+    updateCurrentCfgLabel()
+    print("[BeeSuite] Saved config: " .. name)
+end
+
+local function loadConfig(name)
+    local cfg = WalkerConfigs[name]
+    if not cfg then return end
+    -- Load points
+    points = {}
+    for _, v in ipairs(cfg.points or {}) do
+        table.insert(points, Vector3.new(v[1], v[2], v[3]))
+    end
+    -- Load walker settings
+    if cfg.walker then
+        for k, v in pairs(cfg.walker) do WalkerCfg[k] = v end
+        refreshCfgFields()
+    end
+    currentConfigName = name
+    refreshList()
+    updateWalkerStatus()
+    updateCurrentCfgLabel()
+    print("[BeeSuite] Loaded config: " .. name)
+end
+
+local function deleteConfig(name)
+    WalkerConfigs[name] = nil
+    if currentConfigName == name then currentConfigName = nil end
+    saveWalkerConfigs()
+    refreshCfgList()
+    updateCurrentCfgLabel()
+end
+
+local function renameConfig(oldName, newName)
+    if not newName or newName == "" or oldName == newName then return end
+    if WalkerConfigs[newName] then return end -- name taken
+    WalkerConfigs[newName] = WalkerConfigs[oldName]
+    WalkerConfigs[oldName] = nil
+    if currentConfigName == oldName then currentConfigName = newName end
+    saveWalkerConfigs()
+    refreshCfgList()
+    updateCurrentCfgLabel()
+end
+
+refreshCfgList = function()
+    for _, c in pairs(cfgListContainer:GetChildren()) do
+        if c:IsA("Frame") then c:Destroy() end
+    end
+    
+    -- Sort names alphabetically
+    local names = {}
+    for k in pairs(WalkerConfigs) do table.insert(names, k) end
+    table.sort(names)
+    
+    if #names == 0 then
+        local empty = Instance.new("TextLabel")
+        empty.Size = UDim2.new(1, 0, 0, 22)
+        empty.BackgroundTransparency = 1
+        empty.Text = "  No saved configs yet."
+        empty.TextXAlignment = Enum.TextXAlignment.Left
+        empty.TextColor3 = Color3.fromRGB(140, 140, 140)
+        empty.Font = Enum.Font.Gotham
+        empty.TextSize = 11
+        empty.Parent = cfgListContainer
+        return
+    end
+    
+    for _, name in ipairs(names) do
+        local cfg = WalkerConfigs[name]
+        local pointCount = cfg.points and #cfg.points or 0
+        
+        local entry = Instance.new("Frame")
+        entry.Size = UDim2.new(1, 0, 0, 26)
+        entry.BackgroundColor3 = (name == currentConfigName) and Color3.fromRGB(50, 80, 110) or Color3.fromRGB(40, 40, 48)
+        entry.BorderSizePixel = 0
+        entry.Parent = cfgListContainer
+        Instance.new("UICorner", entry).CornerRadius = UDim.new(0, 4)
+
+        -- Name (also a rename input on double-click? for now use textbox)
+        local nameBox = Instance.new("TextBox")
+        nameBox.Size = UDim2.new(1, -160, 1, 0)
+        nameBox.Position = UDim2.new(0, 6, 0, 0)
+        nameBox.BackgroundTransparency = 1
+        nameBox.Text = name .. "  (" .. pointCount .. " pts)"
+        nameBox.TextXAlignment = Enum.TextXAlignment.Left
+        nameBox.TextColor3 = Color3.fromRGB(220, 220, 220)
+        nameBox.Font = Enum.Font.Gotham
+        nameBox.TextSize = 11
+        nameBox.ClearTextOnFocus = true
+        nameBox.Parent = entry
+
+        nameBox.Focused:Connect(function()
+            nameBox.Text = name -- show pure name when editing
+        end)
+        nameBox.FocusLost:Connect(function(enter)
+            if enter then
+                renameConfig(name, nameBox.Text)
+            else
+                nameBox.Text = name .. "  (" .. pointCount .. " pts)"
+            end
+        end)
+
+        local loadBtn = Instance.new("TextButton")
+        loadBtn.Size = UDim2.new(0, 45, 0, 20)
+        loadBtn.Position = UDim2.new(1, -152, 0, 3)
+        loadBtn.BackgroundColor3 = Color3.fromRGB(60, 160, 80)
+        loadBtn.BorderSizePixel = 0
+        loadBtn.Text = "Load"
+        loadBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        loadBtn.Font = Enum.Font.GothamBold
+        loadBtn.TextSize = 10
+        loadBtn.Parent = entry
+        Instance.new("UICorner", loadBtn).CornerRadius = UDim.new(0, 3)
+        loadBtn.MouseButton1Click:Connect(function() loadConfig(name) end)
+
+        local saveBtn = Instance.new("TextButton")
+        saveBtn.Size = UDim2.new(0, 45, 0, 20)
+        saveBtn.Position = UDim2.new(1, -103, 0, 3)
+        saveBtn.BackgroundColor3 = Color3.fromRGB(100, 140, 200)
+        saveBtn.BorderSizePixel = 0
+        saveBtn.Text = "Save"
+        saveBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        saveBtn.Font = Enum.Font.GothamBold
+        saveBtn.TextSize = 10
+        saveBtn.Parent = entry
+        Instance.new("UICorner", saveBtn).CornerRadius = UDim.new(0, 3)
+        saveBtn.MouseButton1Click:Connect(function() saveConfigAs(name) end)
+
+        local delBtn = Instance.new("TextButton")
+        delBtn.Size = UDim2.new(0, 45, 0, 20)
+        delBtn.Position = UDim2.new(1, -54, 0, 3)
+        delBtn.BackgroundColor3 = Color3.fromRGB(190, 60, 60)
+        delBtn.BorderSizePixel = 0
+        delBtn.Text = "Delete"
+        delBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        delBtn.Font = Enum.Font.GothamBold
+        delBtn.TextSize = 10
+        delBtn.Parent = entry
+        Instance.new("UICorner", delBtn).CornerRadius = UDim.new(0, 3)
+        delBtn.MouseButton1Click:Connect(function() deleteConfig(name) end)
+    end
+end
+
+-- Save New button
+saveNewBtn.MouseButton1Click:Connect(function()
+    local n = nameInput.Text
+    if n and n ~= "" then
+        saveConfigAs(n)
+        nameInput.Text = ""
+    end
+end)
+
+-- Update Current button
+updateBtn.MouseButton1Click:Connect(function()
+    if currentConfigName then
+        saveConfigAs(currentConfigName)
+    else
+        print("[BeeSuite] No config loaded — use 'Save New' with a name first.")
+    end
+end)
+
+-- ==== WALKING FUNCTIONS ====
 local function walkTo(destination)
     local root = getRoot()
     if not root then return end
@@ -554,7 +790,6 @@ local function setPoint()
     local root = getRoot()
     if root then
         table.insert(points, root.Position)
-        savePoints()
         refreshList()
         updateWalkerStatus()
     end
@@ -574,7 +809,6 @@ local function deleteAllPoints()
     StopMove()
     walkBtn.Text = "Start Walking"
     walkBtn.BackgroundColor3 = Color3.fromRGB(60, 160, 80)
-    if isfile and isfile(SAVE_FILE) then delfile(SAVE_FILE) end
     refreshList()
     updateWalkerStatus()
 end
@@ -825,56 +1059,49 @@ end)
 local holdLeft = false
 local holdLabel = makeLabel(utilTab, "Hold Left Click: OFF")
 local holdBtn = makeButton(utilTab, "Toggle Hold Left", Color3.fromRGB(60, 120, 200))
+
+local pressMethod = mouse1press
+local releaseMethod = mouse1release
+
 local function toggleHold()
     holdLeft = not holdLeft
     holdLabel.Text = "Hold Left Click: " .. (holdLeft and "ON" or "OFF")
     holdLabel.TextColor3 = holdLeft and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(180, 180, 180)
     holdBtn.BackgroundColor3 = holdLeft and Color3.fromRGB(200, 140, 40) or Color3.fromRGB(60, 120, 200)
-    if not holdLeft then
-        local c = workspace.CurrentCamera
-        local center = Vector2.new(c.ViewportSize.X / 2, c.ViewportSize.Y / 2)
-        VIM:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 0)
+    
+    if pressMethod then
+        if holdLeft then pressMethod() else releaseMethod() end
+    else
+        if not holdLeft then
+            local c = workspace.CurrentCamera
+            local center = Vector2.new(c.ViewportSize.X / 2, c.ViewportSize.Y / 2)
+            VIM:SendMouseButtonEvent(center.X, center.Y, 0, false, game, 0)
+        end
     end
 end
 holdBtn.MouseButton1Click:Connect(toggleHold)
 
-task.spawn(function()
-    while true do
-        if holdLeft then
-            local c = workspace.CurrentCamera
-            local center = Vector2.new(c.ViewportSize.X / 2, c.ViewportSize.Y / 2)
-            VIM:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 0)
+if not pressMethod then
+    task.spawn(function()
+        while true do
+            if holdLeft then
+                local c = workspace.CurrentCamera
+                local center = Vector2.new(c.ViewportSize.X / 2, c.ViewportSize.Y / 2)
+                VIM:SendMouseButtonEvent(center.X, center.Y, 0, true, game, 0)
+            end
+            task.wait(0.05)
         end
-        task.wait(0.05)
-    end
-end)
+    end)
+end
 
 -- ============================================================
 -- TAB: KEYS
 -- ============================================================
 local keysTab = createTab("Keys")
 
-makeSectionHeader(keysTab, "🎹 Keybinds")
-makeLabel(keysTab, "  Click a key button, then press new key")
-
-makeKeybindRow(keysTab, "Set Point", "SetPoint")
-makeKeybindRow(keysTab, "Toggle Walk", "ToggleWalk")
-makeKeybindRow(keysTab, "Delete All Points", "DeleteAll")
-makeKeybindRow(keysTab, "Toggle ESP", "ToggleESP")
-makeKeybindRow(keysTab, "Toggle Auto Reset", "ToggleReset")
-makeKeybindRow(keysTab, "Toggle Hold Click", "ToggleHold")
-
-local resetKeysBtn = makeButton(keysTab, "Reset to Defaults", Color3.fromRGB(140, 60, 60), function()
-    Keybinds.SetPoint = "K"
-    Keybinds.ToggleWalk = "Q"
-    Keybinds.DeleteAll = "L"
-    Keybinds.ToggleESP = "F"
-    Keybinds.ToggleReset = "R"
-    Keybinds.ToggleHold = "M"
-    saveConfigs()
-    -- Refresh key buttons (destroy + rebuild)
+local function buildKeysTab()
     for _, c in pairs(keysTab:GetChildren()) do
-        if c:IsA("Frame") or (c:IsA("TextButton") and c.Text == "Reset to Defaults") then c:Destroy() end
+        if not c:IsA("UIListLayout") and not c:IsA("UIPadding") then c:Destroy() end
     end
     makeSectionHeader(keysTab, "🎹 Keybinds")
     makeLabel(keysTab, "  Click a key button, then press new key")
@@ -884,16 +1111,22 @@ local resetKeysBtn = makeButton(keysTab, "Reset to Defaults", Color3.fromRGB(140
     makeKeybindRow(keysTab, "Toggle ESP", "ToggleESP")
     makeKeybindRow(keysTab, "Toggle Auto Reset", "ToggleReset")
     makeKeybindRow(keysTab, "Toggle Hold Click", "ToggleHold")
-end)
+    makeButton(keysTab, "Reset to Defaults", Color3.fromRGB(140, 60, 60), function()
+        Keybinds.SetPoint = "K"; Keybinds.ToggleWalk = "Q"; Keybinds.DeleteAll = "L"
+        Keybinds.ToggleESP = "F"; Keybinds.ToggleReset = "R"; Keybinds.ToggleHold = "M"
+        saveConfigs()
+        buildKeysTab()
+    end)
+end
+buildKeysTab()
 
 -- ============================================================
--- KEYBINDS DISPATCH (uses configurable keys)
+-- KEYBINDS DISPATCH
 -- ============================================================
 UIS.InputBegan:Connect(function(input, gp)
     if gp then return end
-    if waitingForKey then return end -- don't fire actions while rebinding
+    if waitingForKey then return end
     if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-    
     local keyName = input.KeyCode.Name
     if keyName == Keybinds.SetPoint then setPoint()
     elseif keyName == Keybinds.ToggleWalk then toggleWalk()
@@ -906,7 +1139,9 @@ end)
 
 switchTab("Walker")
 refreshList()
+refreshCfgList()
 updateWalkerStatus()
 updateResetLabel()
+updateCurrentCfgLabel()
 
-print("[BeeSuite] Loaded. Check 'Keys' tab to rebind.")
+print("[BeeSuite] Loaded. Check 'Walker' tab for route configs.")
